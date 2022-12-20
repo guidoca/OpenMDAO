@@ -811,7 +811,11 @@ def var_bounds_plot(kind, ax, value, lower, upper):
     # also need to handle one-sided constraints where only one of lower and upper is given
     if kind == 'constraint' and upper == INF_BOUND and lower == -INF_BOUND:
         raise ValueError("Upper and lower bounds cannot all be None for a constraint")
-
+    
+    if upper is not None:
+        upper = float(upper)
+    if lower is not None:
+        lower = float(lower)
     # Basic plot setup
     plt.rcParams['hatch.linewidth'] = _out_of_bounds_hatch_width  # can't seem to do this any other
     #                                                              way. Cannot control hatch
