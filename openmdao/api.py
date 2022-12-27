@@ -82,6 +82,7 @@ from openmdao.drivers.doe_generators import ListGenerator, CSVGenerator, Uniform
     FullFactorialGenerator, PlackettBurmanGenerator, BoxBehnkenGenerator, LatinHypercubeGenerator, \
     GeneralizedSubsetGenerator
 from openmdao.drivers.line_search_driver import LineSearchDriver
+from openmdao.drivers.pygmo_driver import PygmoDriver
 
 # System-Building Tools
 from openmdao.utils.options_dictionary import OptionsDictionary

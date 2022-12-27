@@ -324,24 +324,24 @@ class LineSearchDriver(Driver):
                 self._lincongrad_cache = None
 
         # Provide gradients for optimizers that support it
-        if opt in _gradient_optimizers:
-            jac = self._gradfunc
-        else:
-            jac = None
+        # if opt in _gradient_optimizers:
+        #     jac = self._gradfunc
+        # else:
+        #     jac = None
 
         # Hessian calculation method for optimizers, which require it
-        if opt in _hessian_optimizers:
-            if 'hess' in self.opt_settings:
-                hess = self.opt_settings.pop('hess')
-            else:
-                # Defaults to BFGS, if not in opt_settings
-                from scipy.optimize import BFGS
-                hess = BFGS()
-        else:
-            hess = None
+        # if opt in _hessian_optimizers:
+        #     if 'hess' in self.opt_settings:
+        #         hess = self.opt_settings.pop('hess')
+        #     else:
+        #         # Defaults to BFGS, if not in opt_settings
+        #         from scipy.optimize import BFGS
+        #         hess = BFGS()
+        # else:
+        #     hess = None
 
-        # compute dynamic simul deriv coloring if option is set
-        coloring = self._get_coloring(run_model=False)
+        # # compute dynamic simul deriv coloring if option is set
+        # coloring = self._get_coloring(run_model=False)
 
         # optimize
         try:
