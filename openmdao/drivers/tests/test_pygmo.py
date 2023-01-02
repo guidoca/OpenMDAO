@@ -576,6 +576,7 @@ class TestConstrainedDifferentialEvolution(unittest.TestCase):
     #     p.model.add_constraint('exec.z', indices=[0], upper=300, alias="ALIAS_TEST")
 
     #     # p.driver = om.PygmoDriver(uda=pg.de(gen=300,xtol=1e-20),pop_size=100)
+    #     p.driver = om.PygmoDriver(uda=pg.pso(gen=300),pop_size=500)
     #     p.driver = om.PygmoDriver(uda=pg.gaco(gen=1000),pop_size=80)
 
     #     p.setup()
