@@ -49,8 +49,6 @@ class SqliteCaseReader(BaseCaseReader):
         Metadata about each system in the recorded model, including options and scaling factors.
     _format_version : int
         The version of the format assumed when loading the file.
-    _solver_metadata : dict
-        Metadata for all the solvers in the model, including their type and options
     _filename : str
         The path to the filename containing the recorded data.
     _abs2meta : dict
@@ -66,8 +64,6 @@ class SqliteCaseReader(BaseCaseReader):
         connections or a promoted input name for multiple connections. This is for output display.
     _driver_cases : DriverCases
         Helper object for accessing cases from the driver_iterations table.
-    _deriv_cases : DerivCases
-        Helper object for accessing cases from the driver_derivatives table.
     _system_cases : SystemCases
         Helper object for accessing cases from the system_iterations table.
     _solver_cases : SolverCases
@@ -1076,7 +1072,7 @@ class CaseTable(object):
             with sqlite3.connect(self._filename) as con:
                 cur = con.cursor()
                 cur.execute(f"SELECT {self._index_name} FROM {self._table_name}"
-                            " ORDER BY id ASC")
+                            " ORDER BY id ASC")  # nosec trusted input
                 rows = cur.fetchall()
 
             con.close()

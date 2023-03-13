@@ -38,7 +38,7 @@ from openmdao.utils.om_warnings import issue_warning, warn_deprecation, \
     DerivativesWarning, PromotionWarning, UnusedOptionWarning
 from openmdao.utils.general_utils import determine_adder_scaler, \
     format_as_float_or_array, ContainsAll, all_ancestors, make_set, match_prom_or_abs, \
-    ensure_compatible, env_truthy, make_traceback
+    ensure_compatible, env_truthy, make_traceback, _is_slicer_op
 from openmdao.approximation_schemes.complex_step import ComplexStep
 from openmdao.approximation_schemes.finite_difference import FiniteDifference
 
@@ -59,13 +59,13 @@ _supported_methods = {
 
 _DEFAULT_COLORING_META = {
     'wrt_patterns': ('*',),  # patterns used to match wrt variables
-    'method': 'fd',          # finite differencing method  ('fd' or 'cs')
-    'wrt_matches': None,     # where matched wrt names are stored
-    'per_instance': True,    # assume each instance can have a different coloring
-    'coloring': None,        # this will contain the actual Coloring object
-    'dynamic': False,        # True if dynamic coloring is being used
-    'static': None,          # either _STD_COLORING_FNAME, a filename, or a Coloring object
-                             # if use_fixed_coloring was called
+    'method': 'fd',  # finite differencing method  ('fd' or 'cs')
+    'wrt_matches': None,  # where matched wrt names are stored
+    'per_instance': True,  # assume each instance can have a different coloring
+    'coloring': None,  # this will contain the actual Coloring object
+    'dynamic': False,  # True if dynamic coloring is being used
+    'static': None,  # either _STD_COLORING_FNAME, a filename, or a Coloring object
+    # if use_fixed_coloring was called
 }
 
 _DEFAULT_COLORING_META.update(_DEF_COMP_SPARSITY_ARGS)
@@ -100,8 +100,6 @@ resp_size_checks = {
 }
 resp_types = {'con': 'constraint', 'obj': 'objective'}
 
-value_deprecated_msg = "The metadata key 'value' will be deprecated in 4.0. Please use 'val'."
-
 
 class _MatchType(IntEnum):
     """
@@ -120,31 +118,6 @@ class _MatchType(IntEnum):
     NAME = 0
     RENAME = 1
     PATTERN = 2
-
-
-class _MetadataDict(dict):
-    """
-    A dict wrapper for a dict of metadata, to throw deprecation if a user indexes in using value.
-    """
-
-    def __getitem__(self, key):
-        try:
-            return dict.__getitem__(self, key)
-        except KeyError:
-            if key == 'value':
-                warn_deprecation(value_deprecated_msg)
-                return dict.__getitem__(self, 'val')
-            raise
-
-    def __setitem__(self, key, val):
-        try:
-            dict.__setitem__(self, key, val)
-        except KeyError:
-            if key == 'value':
-                dict.__setitem__(self, 'val', val)
-                warn_deprecation(value_deprecated_msg)
-            else:
-                raise
 
 
 def collect_errors(method):
@@ -348,13 +321,13 @@ class System(object):
         Driver responses added outside of setup.
     matrix_free : bool
         This is set to True if the component overrides the appropriate function with a user-defined
-        matrix vector product with the Jacobian or any of its subsystems do.
+        matrix vector product with the Jacobian or any of its subsystems do. Note that the framework
+        will not set the matrix_free flag correctly for Component instances having a matrix vector
+        product function that is added dynamically (not declared as part of the class) and in that
+        case the matrix_free flag must be set manually to True.
     _relevant : dict
         Mapping of a VOI to a tuple containing dependent inputs, dependent outputs,
         and dependent systems.
-    _vois : dict
-        Either design vars or responses metadata, depending on the direction of
-        derivatives.
     _mode : str
         Indicates derivative direction for the model, either 'fwd' or 'rev'.
     _scope_cache : dict
@@ -439,7 +412,7 @@ class System(object):
                                        Uses fnmatch wildcards')
         self.recording_options.declare('excludes', types=list, default=[],
                                        desc='Patterns for vars to exclude in recording '
-                                       '(processed post-includes). Uses fnmatch wildcards')
+                                            '(processed post-includes). Uses fnmatch wildcards')
         self.recording_options.declare('options_excludes', types=list, default=[],
                                        desc='User-defined metadata to exclude in recording')
 
@@ -495,7 +468,7 @@ class System(object):
         self._approx_schemes = {}
         self._subjacs_info = {}
         self._approx_subjac_keys = None
-        self.matrix_free = False
+        self.matrix_free = _UNDEFINED
 
         self._owns_approx_jac = False
         self._owns_approx_jac_meta = {}
@@ -547,7 +520,7 @@ class System(object):
         self._filtered_vars_to_record = {}
         self._owning_rank = None
         self._coloring_info = _DEFAULT_COLORING_META.copy()
-        self._first_call_to_linearize = True   # will check in first call to _linearize
+        self._first_call_to_linearize = True  # will check in first call to _linearize
         self._tot_jac = None
         self._saved_errors = None if env_truthy('OPENMDAO_FAIL_FAST') else []
 
@@ -680,7 +653,6 @@ class System(object):
         """
         toidx = self._var_allprocs_abs2idx
         sizes_in = self._var_sizes['input']
-        sizes_out = self._var_sizes['output']
 
         tometa_in = self._var_allprocs_abs2meta['input']
 
@@ -912,9 +884,9 @@ class System(object):
         if not isinstance(name, str):
             raise TypeError('{}: The name argument should be a string, got {}'.format(self.msginfo,
                                                                                       name))
-        are_new_bounds = lower != _UNDEFINED or upper != _UNDEFINED
-        are_new_scaling = scaler != _UNDEFINED or adder != _UNDEFINED or ref != _UNDEFINED or \
-            ref0 != _UNDEFINED
+        are_new_bounds = lower is not _UNDEFINED or upper is not _UNDEFINED
+        are_new_scaling = scaler is not _UNDEFINED or adder is not _UNDEFINED or ref is not \
+            _UNDEFINED or ref0 is not _UNDEFINED
 
         # Must set at least one argument for this function to do something
         if not are_new_scaling and not are_new_bounds:
@@ -943,9 +915,9 @@ class System(object):
         #   method and what were the existing bounds
         if are_new_bounds:
             # wipe out all the bounds and only use what is set by the arguments to this call
-            if lower == _UNDEFINED:
+            if lower is _UNDEFINED:
                 lower = None
-            if upper == _UNDEFINED:
+            if upper is _UNDEFINED:
                 upper = None
         else:
             lower = existing_dv_meta['lower']
@@ -1064,9 +1036,10 @@ class System(object):
             raise TypeError('{}: The name argument should be a string, '
                             'got {}'.format(self.msginfo, name))
 
-        are_new_bounds = equals != _UNDEFINED or lower != _UNDEFINED or upper != _UNDEFINED
-        are_new_scaling = scaler != _UNDEFINED or adder != _UNDEFINED or ref != _UNDEFINED or \
-            ref0 != _UNDEFINED
+        are_new_bounds = equals is not _UNDEFINED or lower is not _UNDEFINED or upper is not \
+            _UNDEFINED
+        are_new_scaling = scaler is not _UNDEFINED or adder is not _UNDEFINED or \
+            ref is not _UNDEFINED or ref0 is not _UNDEFINED
 
         # At least one of the scaling or bounds parameters must be set or function won't do anything
         if not are_new_scaling and not are_new_bounds:
@@ -1112,11 +1085,11 @@ class System(object):
         #   method and what were the existing bounds
         if are_new_bounds:
             # wipe the slate clean and only use what is set by the arguments to this call
-            if equals == _UNDEFINED:
+            if equals is _UNDEFINED:
                 equals = None
-            if lower == _UNDEFINED:
+            if lower is _UNDEFINED:
                 lower = None
-            if upper == _UNDEFINED:
+            if upper is _UNDEFINED:
                 upper = None
         else:
             equals = existing_cons_meta['equals']
@@ -1183,6 +1156,7 @@ class System(object):
             raise TypeError("Argument 'upper' can not be a string ('{}' given). You can not "
                             "specify a variable as upper bound. You can only provide constant "
                             "float values".format(upper))
+
         # Convert equals to ndarray/float as necessary
         if equals is not None:
             try:
@@ -1250,7 +1224,7 @@ class System(object):
             raise TypeError('{}: The name argument should be a string, got {}'.format(self.msginfo,
                                                                                       name))
         # At least one of the scaling parameters must be set or function does nothing
-        if scaler == _UNDEFINED and adder == _UNDEFINED and ref == _UNDEFINED and ref0 == \
+        if scaler is _UNDEFINED and adder is _UNDEFINED and ref is _UNDEFINED and ref0 == \
                 _UNDEFINED:
             raise RuntimeError(
                 'Must set a value for at least one argument in call to set_objective_options.')
@@ -1278,13 +1252,13 @@ class System(object):
 
         # Since one or more of these are being set by the incoming arguments, the
         #   ones that are not being set should be set to None since they will be re-computed below
-        if scaler == _UNDEFINED:
+        if scaler is _UNDEFINED:
             scaler = None
-        if adder == _UNDEFINED:
+        if adder is _UNDEFINED:
             adder = None
-        if ref == _UNDEFINED:
+        if ref is _UNDEFINED:
             ref = None
-        if ref0 == _UNDEFINED:
+        if ref0 is _UNDEFINED:
             ref0 = None
 
         new_obj_metadata = {}
@@ -1403,7 +1377,7 @@ class System(object):
         if method not in _supported_methods:
             msg = '{}: Method "{}" is not supported, method must be one of {}'
             raise ValueError(msg.format(self.msginfo, method,
-                             [m for m in _supported_methods if m != 'exact']))
+                                        [m for m in _supported_methods if m != 'exact']))
         if method not in self._approx_schemes:
             self._approx_schemes[method] = _supported_methods[method]()
         return self._approx_schemes[method]
@@ -1462,6 +1436,7 @@ class System(object):
         """
         # save a ref to the problem level options.
         self._problem_meta = prob_meta
+        self._initial_condition_cache = {}
 
         # reset any coloring if a Coloring object was not set explicitly
         if self._coloring_info['dynamic'] or self._coloring_info['static'] is not None:
@@ -1481,6 +1456,7 @@ class System(object):
             self._configure()
         finally:
             prob_meta['config_info'] = None
+            prob_meta['setup_status'] = _SetupStatus.POST_CONFIGURE
 
         self._configure_check()
 
@@ -2710,7 +2686,7 @@ class System(object):
 
                 if old_key != '*':
                     msg = f"{io} variable '{name}', promoted using {new_using}, " \
-                        f"was already promoted using {old_using}."
+                          f"was already promoted using {old_using}."
                     issue_warning(msg, prefix=self.msginfo, category=PromotionWarning)
             except Exception:
                 type_exc, exc, tb = sys.exc_info()
@@ -3912,6 +3888,7 @@ class System(object):
         # Human readable error message during Driver setup.
         try:
             out = {}
+            # keys of self._responses are the alias or the promoted name
             for name, data in self._responses.items():
                 if 'parallel_deriv_color' in data and data['parallel_deriv_color'] is not None:
                     self._problem_meta['using_par_deriv_color'] = True
@@ -3925,9 +3902,10 @@ class System(object):
                         raise RuntimeError(f"Constraint alias '{alias}' on '{path}' "
                                            "is the same name as an existing variable.")
                     abs_name = prom2abs_out[name][0]
+                    # for outputs, the dict key is always the absolute name of the output
                     out[abs_name] = data
-                    out[abs_name]['source'] = abs_name
-                    out[abs_name]['distributed'] = \
+                    data['source'] = abs_name
+                    data['distributed'] = \
                         abs_name in abs2meta_out and abs2meta_out[abs_name]['distributed']
 
                 else:
@@ -3936,22 +3914,22 @@ class System(object):
                         key = in_abs = prom2abs_in[name][0]
                         src_path = conns[in_abs]
                     else:  # name is an alias
+                        key = alias
                         if prom in prom2abs_out:
                             src_path = prom2abs_out[prom][0]
                         else:
                             src_path = conns[prom2abs_in[prom][0]]
 
-                        key = alias
-
                     distrib = src_path in abs2meta_out and abs2meta_out[src_path]['distributed']
+                    data['source'] = src_path
+                    data['distributed'] = distrib
+
                     if use_prom_ivc:
+                        # dict key is either an alias or the promoted name
                         out[name] = data
-                        out[name]['source'] = src_path
-                        out[name]['distributed'] = distrib
                     else:
+                        # dict key is either an alias or the absolute name of the input
                         out[key] = data
-                        out[key]['source'] = src_path
-                        out[key]['distributed'] = distrib
 
         except KeyError as err:
             msg = "{}: Output not found for response {}."
@@ -4063,10 +4041,11 @@ class System(object):
             self._apply_nonlinear()
 
     def get_io_metadata(self, iotypes=('input', 'output'), metadata_keys=None,
-                        includes=None, excludes=None, tags=(), get_remote=False, rank=None,
+                        includes=None, excludes=None, is_indep_var=None, is_design_var=None,
+                        tags=(), get_remote=False, rank=None,
                         return_rel_names=True):
         """
-        Retrieve metdata for a filtered list of variables.
+        Retrieve metadata for a filtered list of variables.
 
         Parameters
         ----------
@@ -4082,6 +4061,14 @@ class System(object):
             which includes all variables.
         excludes : str, iter of str or None
             Collection of glob patterns for pathnames of variables to exclude. Default is None.
+        is_indep_var : bool or None
+            If None (the default), do no additional filtering of the inputs.
+            If True, list only inputs connected to an output tagged `openmdao:indep_var`.
+            If False, list only inputs _not_ connected to outputs tagged `openmdao:indep_var`.
+        is_design_var : bool or None
+            If None (the default), do no additional filtering of the inputs.
+            If True, list only inputs connected to outputs that are driver design variables.
+            If False, list only inputs _not_ connected to outputs that are driver design variables.
         tags : str or iter of strs
             User defined tags that can be used to filter what gets listed. Only inputs with the
             given tags will be listed.
@@ -4128,12 +4115,6 @@ class System(object):
         need_gather = get_remote and self.comm.size > 1
         if metadata_keys is not None:
             keyset = set(metadata_keys)
-            # DEPRECATION: if 'value' in keyset, replace with 'val'
-            if 'value' in keyset:
-                keyset.remove('value')
-                keyset.add('val')
-                warn_deprecation(value_deprecated_msg)
-
             diff = keyset - allowed_meta_names
             if diff:
                 raise RuntimeError(f"{self.msginfo}: {sorted(diff)} are not valid metadata entry "
@@ -4155,6 +4136,9 @@ class System(object):
         result = {}
 
         it = self._var_allprocs_abs2prom if get_remote else self._var_abs2prom
+
+        if is_design_var is not None:
+            des_vars = self.get_design_vars(get_sizes=False, use_prom_ivc=False)
 
         for iotype in iotypes:
             cont2meta = metadict[iotype]
@@ -4179,9 +4163,9 @@ class System(object):
                     ret_meta = None
                 else:
                     if metadata_keys is None:
-                        ret_meta = _MetadataDict(meta)
+                        ret_meta = dict(meta)
                     else:
-                        ret_meta = _MetadataDict()
+                        ret_meta = {}
                         for key in keyset:
                             try:
                                 ret_meta[key] = meta[key]
@@ -4197,7 +4181,7 @@ class System(object):
 
                         if rank is None or self.comm.rank == rank:
                             if not ret_meta:
-                                ret_meta = _MetadataDict()
+                                ret_meta = {}
                             if distrib:
                                 if 'val' in keyset:
                                     # assemble the full distributed value
@@ -4225,11 +4209,40 @@ class System(object):
                             ret_meta = None
 
                 if ret_meta is not None:
+                    # handle is_indep_var
+                    if is_indep_var is not None:
+                        if iotype == 'output':
+                            out_meta = meta
+                        else:
+                            src_name = self.get_source(abs_name)
+                            try:
+                                out_meta = metadict['output'][src_name]
+                            except KeyError:
+                                out_meta = disc_metadict['output'][src_name]
+
+                        src_tags = out_meta['tags'] if 'tags' in out_meta else {}
+                        if is_indep_var is True and 'openmdao:indep_var' not in src_tags:
+                            continue
+                        elif is_indep_var is False and 'openmdao:indep_var' in src_tags:
+                            continue
+
+                    # handle is_design_var
+                    if is_design_var is not None:
+                        if iotype == 'output':
+                            out_name = abs_name
+                        else:
+                            out_name = self.get_source(abs_name)
+                        if is_design_var is True and out_name not in des_vars:
+                            continue
+                        elif is_design_var is False and out_name in des_vars:
+                            continue
+
+                    # handle tags
                     if tags and not tagset & ret_meta['tags']:
                         continue
 
                     ret_meta['prom_name'] = prom
-                    ret_meta['discrete'] = abs_name not in all2meta
+                    ret_meta['discrete'] = abs_name not in all2meta[iotype]
 
                     if return_rel_names:
                         result[rel_name] = ret_meta
@@ -4250,9 +4263,10 @@ class System(object):
                     tags=None,
                     includes=None,
                     excludes=None,
+                    is_indep_var=None,
+                    is_design_var=None,
                     all_procs=False,
                     out_stream=_DEFAULT_OUT_STREAM,
-                    values=None,
                     print_min=False,
                     print_max=False):
         """
@@ -4290,14 +4304,20 @@ class System(object):
             which includes all input variables.
         excludes : None, str, or iter of str
             Collection of glob patterns for pathnames of variables to exclude. Default is None.
+        is_indep_var : bool or None
+            If None (the default), do no additional filtering of the inputs.
+            If True, list only inputs connected to an output tagged `openmdao:indep_var`.
+            If False, list only inputs _not_ connected to outputs tagged `openmdao:indep_var`.
+        is_design_var : bool or None
+            If None (the default), do no additional filtering of the inputs.
+            If True, list only inputs connected to outputs that are driver design variables.
+            If False, list only inputs _not_ connected to outputs that are driver design variables.
         all_procs : bool, optional
             When True, display output on all ranks. Default is False, which will display
             output only from rank 0.
         out_stream : file-like object
             Where to send human readable output. Default is sys.stdout.
             Set to None to suppress.
-        values : bool, optional
-            This argument has been deprecated and will be removed in 4.0.
         print_min : bool
             When true, if the input value is an array, print its smallest value.
         print_max : bool
@@ -4308,26 +4328,19 @@ class System(object):
         list of (name, metadata)
             List of input names and other optional information about those inputs.
         """
-        if values is not None:
-            warn_deprecation(f"{self.msginfo}: The 'values' argument to 'list_inputs()' is "
-                             "deprecated and will be removed in 4.0. Please use 'val' instead.")
-        elif not val and values:
-            values = True
-        else:
-            values = val
-
         if self._problem_meta['setup_status'] < _SetupStatus.POST_FINAL_SETUP:
             issue_warning("Calling `list_inputs` before `final_setup` will only "
                           "display the default values of variables and will not show the result of "
                           "any `set_val` calls.")
 
-        metavalues = values and self._inputs is None
+        metavalues = val and self._inputs is None
 
         keynames = ['val', 'units', 'shape', 'global_shape', 'desc', 'tags']
         keyvals = [metavalues, units, shape, global_shape, desc, tags is not None]
         keys = [n for i, n in enumerate(keynames) if keyvals[i]]
 
-        inputs = self.get_io_metadata(('input',), keys, includes, excludes, tags,
+        inputs = self.get_io_metadata(('input',), keys, includes, excludes,
+                                      is_indep_var, is_design_var, tags,
                                       get_remote=True,
                                       rank=None if all_procs or val else 0,
                                       return_rel_names=False)
@@ -4342,7 +4355,7 @@ class System(object):
                 for key in to_remove:
                     del meta[key]
 
-        if values and self._inputs is not None:
+        if val and self._inputs is not None:
             # we want value from the input vector, not from the metadata
             print_options = np.get_printoptions()
             np_precision = print_options['precision']
@@ -4390,10 +4403,11 @@ class System(object):
                      tags=None,
                      includes=None,
                      excludes=None,
+                     is_indep_var=None,
+                     is_design_var=None,
                      all_procs=False,
                      list_autoivcs=False,
                      out_stream=_DEFAULT_OUT_STREAM,
-                     values=None,
                      print_min=False,
                      print_max=False):
         """
@@ -4445,6 +4459,14 @@ class System(object):
             which includes all output variables.
         excludes : None, str, or iter of str
             Collection of glob patterns for pathnames of variables to exclude. Default is None.
+        is_indep_var : bool or None
+            If None (the default), do no additional filtering of the inputs.
+            If True, list only outputs tagged `openmdao:indep_var`.
+            If False, list only outputs that are _not_ tagged `openmdao:indep_var`.
+        is_design_var : bool or None
+            If None (the default), do no additional filtering of the inputs.
+            If True, list only inputs connected to outputs that are driver design variables.
+            If False, list only inputs _not_ connected to outputs that are driver design variables.
         all_procs : bool, optional
             When True, display output on all processors. Default is False.
         list_autoivcs : bool
@@ -4452,8 +4474,6 @@ class System(object):
         out_stream : file-like
             Where to send human readable output. Default is sys.stdout.
             Set to None to suppress.
-        values : bool, optional
-            This argument has been deprecated and will be removed in 4.0.
         print_min : bool
             When true, if the output value is an array, print its smallest value.
         print_max : bool
@@ -4464,16 +4484,8 @@ class System(object):
         list of (name, metadata)
             List of output names and other optional information about those outputs.
         """
-        if values is not None:
-            warn_deprecation(f"{self.msginfo}: The 'values' argument to 'list_outputs()' is "
-                             "deprecated and will be removed in 4.0. Please use 'val' instead.")
-        elif not val and values:
-            values = True
-        else:
-            values = val
-
         keynames = ['val', 'units', 'shape', 'global_shape', 'desc', 'tags']
-        keyflags = [values, units, shape, global_shape, desc, tags]
+        keyflags = [val, units, shape, global_shape, desc, tags]
 
         keys = [name for i, name in enumerate(keynames) if keyflags[i]]
 
@@ -4482,7 +4494,8 @@ class System(object):
         if scaling:
             keys.extend(('ref', 'ref0', 'res_ref'))
 
-        outputs = self.get_io_metadata(('output',), keys, includes, excludes, tags,
+        outputs = self.get_io_metadata(('output',), keys, includes, excludes,
+                                       is_indep_var, is_design_var, tags,
                                        get_remote=True,
                                        rank=None if all_procs or val or residuals else 0,
                                        return_rel_names=False)
@@ -4492,13 +4505,13 @@ class System(object):
             outputs = {n: m for n, m in outputs.items() if not n.startswith('_auto_ivc.')}
 
         # get values & resids
-        if self._outputs is not None and (values or residuals or residuals_tol):
+        if self._outputs is not None and (val or residuals or residuals_tol):
             to_remove = []
             print_options = np.get_printoptions()
             np_precision = print_options['precision']
 
             for name, meta in outputs.items():
-                if values:
+                if val:
                     # we want value from the input vector, not from the metadata
                     meta['val'] = self._abs_get_val(name, get_remote=True,
                                                     rank=None if all_procs else 0, kind='output')
@@ -4842,7 +4855,7 @@ class System(object):
         """
         if MPI:
             raise RuntimeError(self.msginfo + ": Recording of Systems when running parallel "
-                               "code is not supported yet")
+                                              "code is not supported yet")
 
         self._rec_mgr.append(recorder)
 
@@ -5144,7 +5157,7 @@ class System(object):
         if get_remote and (distrib or abs_name in vars_to_gather) and self.comm.size > 1:
             owner = self._owning_rank[abs_name]
             myrank = self.comm.rank
-            if rank is None:   # bcast
+            if rank is None:  # bcast
                 if distrib:
                     idx = self._var_allprocs_abs2idx[abs_name]
                     sizes = self._var_sizes[typ][:, idx]
@@ -5165,7 +5178,7 @@ class System(object):
                     # TODO: use Bcast if not discrete for speed
                     new_val = self.comm.bcast(val, root=owner)
                     val = new_val
-            else:   # retrieve to rank
+            else:  # retrieve to rank
                 if distrib:
                     idx = self._var_allprocs_abs2idx[abs_name]
                     sizes = self._var_sizes[typ][:, idx]
@@ -5263,6 +5276,266 @@ class System(object):
                 val = self.convert2units(abs_names[0], val, simp_units)
 
         return val
+
+    def _get_cached_val(self, name, abs_names, get_remote=False):
+        # We have set and cached already
+        for abs_name in abs_names:
+            if abs_name in self._initial_condition_cache:
+                return self._initial_condition_cache[abs_name][0]
+
+        # Vector not setup, so we need to pull values from saved metadata request.
+        model = self._problem_meta['model_ref']()
+
+        try:
+            conns = model._conn_abs_in2out
+        except AttributeError:
+            conns = {}
+
+        abs_name = abs_names[0]
+        vars_to_gather = self._problem_meta['vars_to_gather']
+        units = None
+
+        meta = model._var_abs2meta
+        io = 'output' if abs_name in meta['output'] else 'input'
+        if abs_name in meta[io]:
+            if abs_name in conns:
+                smeta = meta['output'][conns[abs_name]]
+                val = smeta['val']  # output
+                units = smeta['units']
+            else:
+                vmeta = meta[io][abs_name]
+                val = vmeta['val']
+                units = vmeta['units']
+        else:
+            # not found in real outputs or inputs, try discretes
+            meta = model._var_discrete
+            io = 'output' if abs_name in meta['output'] else 'input'
+            if abs_name in meta[io]:
+                if abs_name in conns:
+                    val = meta['output'][conns[abs_name]]['val']
+                else:
+                    val = meta[io][abs_name]['val']
+
+        if get_remote and abs_name in vars_to_gather:
+            owner = vars_to_gather[abs_name]
+            if model.comm.rank == owner:
+                model.comm.bcast(val, root=owner)
+            else:
+                val = model.comm.bcast(None, root=owner)
+
+        if val is not _UNDEFINED:
+            # Need to cache the "get" in case the user calls in-place numpy operations.
+            self._initial_condition_cache[abs_name] = (val, units, self.pathname, name)
+
+        return val
+
+    def set_val(self, name, val, units=None, indices=None):
+        """
+        Set an input or output variable.
+
+        Parameters
+        ----------
+        name : str
+            Promoted or relative variable name in the system's namespace.
+        val : object
+            Value to assign to this variable.
+        units : str, optional
+            Units of the value.
+        indices : int or list of ints or tuple of ints or int ndarray or Iterable or None, optional
+            Indices or slice to set.
+        """
+        model = self._problem_meta['model_ref']()
+        conns = model._conn_global_abs_in2out
+        post_setup = self._problem_meta['setup_status'] >= _SetupStatus.POST_SETUP
+        has_vectors = self._problem_meta['setup_status'] >= _SetupStatus.POST_FINAL_SETUP
+        value = val
+
+        all_meta = model._var_allprocs_abs2meta
+        loc_meta = model._var_abs2meta
+        n_proms = 0  # if nonzero, name given was promoted input name w/o a matching prom output
+
+        try:
+            ginputs = model._group_inputs
+        except AttributeError:
+            ginputs = {}  # could happen if top level system is not a Group
+
+        if post_setup:
+            abs_names = name2abs_names(self, name)
+        else:
+            raise RuntimeError(f"{self.msginfo}: Called set_val({name}, ...) before setup "
+                               "completes.")
+
+        if abs_names:
+            n_proms = len(abs_names)  # for output this will never be > 1
+            if n_proms > 1 and name in ginputs:
+                abs_name = ginputs[name][0].get('use_tgt', abs_names[0])
+            else:
+                abs_name = abs_names[0]
+        else:
+            raise KeyError(f'{model.msginfo}: Variable "{name}" not found.')
+
+        set_units = None
+
+        if abs_name in conns:  # we're setting an input
+            src = conns[abs_name]
+            if abs_name not in model._var_allprocs_discrete['input']:  # input is continuous
+                value = np.asarray(value)
+                tmeta = all_meta['input'][abs_name]
+                tunits = tmeta['units']
+                sunits = all_meta['output'][src]['units']
+                if abs_name in loc_meta['input']:
+                    tlocmeta = loc_meta['input'][abs_name]
+                else:
+                    tlocmeta = None
+
+                gunits = ginputs[name][0].get('units') if name in ginputs else None
+                if n_proms > 1:  # promoted input name was used
+                    if gunits is None:
+                        tunit_list = [all_meta['input'][n]['units'] for n in abs_names]
+                        tu0 = tunit_list[0]
+                        for tu in tunit_list:
+                            if tu != tu0:
+                                model._show_ambiguity_msg(name, ('units',), abs_names)
+
+                if units is None:
+                    # avoids double unit conversion
+                    ivalue = value
+                    if sunits is not None:
+                        if gunits is not None and gunits != tunits:
+                            value = model.convert_from_units(src, value, gunits)
+                        else:
+                            value = model.convert_from_units(src, value, tunits)
+                else:
+                    if gunits is None:
+                        ivalue = model.convert_from_units(abs_name, value, units)
+                    else:
+                        ivalue = model.convert_units(name, value, units, gunits)
+                    value = model.convert_from_units(src, value, units)
+                set_units = sunits
+        else:
+            src = abs_name
+            if units is not None:
+                value = model.convert_from_units(abs_name, value, units)
+                try:
+                    set_units = all_meta['output'][abs_name]['units']
+                except KeyError:  # this can happen if a component is the top level System
+                    set_units = all_meta['input'][abs_name]['units']
+
+        # Caching only needed if vectors aren't allocated yet.
+        if not has_vectors:
+            ic_cache = model._initial_condition_cache
+            if indices is not None:
+                self._get_cached_val(name, abs_names)
+                try:
+                    cval = ic_cache[abs_name][0]
+                    if _is_slicer_op(indices):
+                        try:
+                            ic_cache[abs_name] = (value[indices], set_units, self.pathname, name)
+                        except IndexError:
+                            cval[indices] = value
+                            ic_cache[abs_name] = (cval, set_units, self.pathname, name)
+                    else:
+                        cval[indices] = value
+                        ic_cache[abs_name] = (cval, set_units, self.pathname, name)
+                except Exception as err:
+                    raise RuntimeError(f"Failed to set value of '{name}': {str(err)}.")
+            else:
+                ic_cache[abs_name] = (value, set_units, self.pathname, name)
+        else:
+            myrank = model.comm.rank
+
+            if indices is None:
+                indices = _full_slice
+
+            if model._outputs._contains_abs(abs_name):
+                distrib = all_meta['output'][abs_name]['distributed']
+                if (distrib and indices is _full_slice and
+                        value.size == all_meta['output'][abs_name]['global_size']):
+                    # assume user is setting using full distributed value
+                    sizes = model._var_sizes['output'][:, model._var_allprocs_abs2idx[abs_name]]
+                    start = np.sum(sizes[:myrank])
+                    end = start + sizes[myrank]
+                    model._outputs.set_var(abs_name, value[start:end], indices)
+                else:
+                    model._outputs.set_var(abs_name, value, indices)
+            elif abs_name in conns:  # input name given. Set value into output
+                src_is_auto_ivc = src.startswith('_auto_ivc.')
+                # when setting auto_ivc output, error messages should refer
+                # to the promoted name used in the set_val call
+                var_name = name if src_is_auto_ivc else src
+                if model._outputs._contains_abs(src):  # src is local
+                    if (model._outputs._abs_get_val(src).size == 0 and
+                            src_is_auto_ivc and
+                            all_meta['output'][src]['distributed']):
+                        pass  # special case, auto_ivc dist var with 0 local size
+                    elif tmeta['has_src_indices']:
+                        if tlocmeta:  # target is local
+                            flat = False
+                            if name in model._var_prom2inds:
+                                sshape, inds, flat = model._var_prom2inds[name]
+                                src_indices = inds
+                            elif (tlocmeta.get('manual_connection') or
+                                  model._inputs._contains_abs(name)):
+                                src_indices = tlocmeta['src_indices']
+                            else:
+                                src_indices = None
+
+                            if src_indices is None:
+                                model._outputs.set_var(src, value, _full_slice, flat,
+                                                       var_name=var_name)
+                            else:
+                                flat = src_indices._flat_src
+
+                                if tmeta['distributed']:
+                                    src_indices = src_indices.shaped_array()
+                                    ssizes = model._var_sizes['output']
+                                    sidx = model._var_allprocs_abs2idx[src]
+                                    ssize = ssizes[myrank, sidx]
+                                    start = np.sum(ssizes[:myrank, sidx])
+                                    end = start + ssize
+                                    if np.any(src_indices < start) or np.any(src_indices >= end):
+                                        raise RuntimeError(f"{model.msginfo}: Can't set {name}: "
+                                                           "src_indices refer "
+                                                           "to out-of-process array entries.")
+                                    if start > 0:
+                                        src_indices = src_indices - start
+                                    src_indices = indexer(src_indices)
+                                if indices is _full_slice:
+                                    model._outputs.set_var(src, value, src_indices, flat,
+                                                           var_name=var_name)
+                                else:
+                                    model._outputs.set_var(src, value, src_indices.apply(indices),
+                                                           True, var_name=var_name)
+                        else:
+                            raise RuntimeError(f"{model.msginfo}: Can't set {abs_name}: remote"
+                                               " connected inputs with src_indices currently not"
+                                               " supported.")
+                    else:
+                        value = np.asarray(value)
+                        if indices is not _full_slice:
+                            indices = indexer(indices)
+                        model._outputs.set_var(src, value, indices, var_name=var_name)
+                elif src in model._discrete_outputs:
+                    model._discrete_outputs[src] = value
+                # also set the input
+                # TODO: maybe remove this if inputs are removed from case recording
+                if n_proms < 2:
+                    if model._inputs._contains_abs(abs_name):
+                        model._inputs.set_var(abs_name, ivalue, indices)
+                    elif abs_name in model._discrete_inputs:
+                        model._discrete_inputs[abs_name] = value
+                    else:
+                        # must be a remote var. so, just do nothing on this proc. We can't get here
+                        # unless abs_name is found in connections, so the variable must exist.
+                        if abs_name in model._var_allprocs_abs2meta:
+                            print(f"Variable '{name}' is remote on rank {self.comm.rank}.  "
+                                  "Local assignment ignored.")
+            elif abs_name in model._discrete_outputs:
+                model._discrete_outputs[abs_name] = value
+            elif model._inputs._contains_abs(abs_name):   # could happen if model is a component
+                model._inputs.set_var(abs_name, value, indices)
+            elif abs_name in model._discrete_inputs:   # could happen if model is a component
+                model._discrete_inputs[abs_name] = value
 
     def _get_input_from_src(self, name, abs_ins, conns, units=None, indices=None,
                             get_remote=False, rank=None, vec_name='nonlinear', flat=False,
@@ -5450,12 +5723,12 @@ class System(object):
                     if rank is None:
                         parts = self.comm.allgather(val)
                         parts = [p for p in parts if p.size > 0]
-                        val = np.hstack(parts)
+                        val = np.concatenate(parts, axis=0)
                     else:
                         parts = self.comm.gather(val, root=rank)
                         if rank == self.comm.rank:
                             parts = [p for p in parts if p.size > 0]
-                            val = np.hstack(parts)
+                            val = np.concatenate(parts, axis=0)
                         else:
                             val = None
                 else:  # non-distrib input
@@ -5483,7 +5756,7 @@ class System(object):
             else:
                 val = self.convert2units(abs_name, val, units)
         elif (vmeta['units'] is not None and smeta['units'] is not None and
-                vmeta['units'] != smeta['units']):
+              vmeta['units'] != smeta['units']):
             val = self.convert2units(src, val, vmeta['units'])
 
         return val
@@ -5818,23 +6091,12 @@ class System(object):
         for dv in desvars:
             if dv not in graph:
                 graph.add_node(dv, type_='out')
-                parts = dv.rsplit('.', 1)
-                if len(parts) == 1:
-                    system = ''  # this happens when a component is the model
-                    graph.add_edge(dv, system)
-                else:
-                    system = parts[0]
-                    graph.add_edge(system, dv)
+                graph.add_edge(dv.rpartition('.')[0], dv)
 
         for res in responses:
             if res not in graph:
                 graph.add_node(res, type_='out')
-                parts = res.rsplit('.', 1)
-                if len(parts) == 1:
-                    system = ''  # this happens when a component is the model
-                else:
-                    system = parts[0]
-                graph.add_edge(system, res)
+                graph.add_edge(res.rpartition('.')[0], res)
 
         nodes = graph.nodes
         grev = graph.reverse(copy=False)
@@ -5847,7 +6109,7 @@ class System(object):
 
         for desvar, dvmeta in desvars.items():
             dvset = set(self.all_connected_nodes(graph, desvar))
-            parallel_deriv_color = dvmeta.get('parallel_deriv_color')
+            parallel_deriv_color = dvmeta['parallel_deriv_color']
             if parallel_deriv_color:
                 pd_dv_locs[desvar] = set(self.all_connected_nodes(graph, desvar, local=True))
                 pd_err_chk[parallel_deriv_color][desvar] = pd_dv_locs[desvar]
@@ -5855,7 +6117,7 @@ class System(object):
             for response, resmeta in responses.items():
                 if response not in rescache:
                     rescache[response] = set(self.all_connected_nodes(grev, response))
-                    parallel_deriv_color = resmeta.get('parallel_deriv_color')
+                    parallel_deriv_color = resmeta['parallel_deriv_color']
                     if parallel_deriv_color:
                         pd_res_locs[response] = set(self.all_connected_nodes(grev, response,
                                                                              local=True))
@@ -5877,11 +6139,7 @@ class System(object):
                     for node in common:
                         if 'type_' in nodes[node]:
                             typ = nodes[node]['type_']
-                            parts = node.rsplit('.', 1)
-                            if len(parts) == 1:
-                                system = ''
-                            else:
-                                system = parts[0]
+                            system = node.rpartition('.')[0]
                             if typ == 'in':  # input var
                                 input_deps.add(node)
                                 if system not in sys_deps:
@@ -6272,16 +6530,21 @@ class System(object):
             prob_meta['saved_errors'].extend(self._saved_errors)
         self._saved_errors = None if env_truthy('OPENMDAO_FAIL_FAST') else []
 
-    def has_declared_resids(self):
-        """
-        Return True if this System has declared residuals.
+    def _get_inconsistent_keys(self):
+        keys = set()
+        if self.comm.size > 1:
+            from openmdao.core.component import Component
+            if isinstance(self, Component):
+                keys.update(self._inconsistent_keys)
+            else:
+                for comp in self.system_iter(recurse=True, include_self=True, typ=Component):
+                    keys.update(comp._inconsistent_keys)
+            myrank = self.comm.rank
 
-        Returns
-        -------
-        bool
-            True if this System has declared residuals.
-        """
-        return False
+            for rank, proc_keys in enumerate(self.comm.allgather(keys)):
+                if rank != myrank:
+                    keys.update(proc_keys)
+        return keys
 
     def is_explicit(self):
         """

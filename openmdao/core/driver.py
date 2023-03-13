@@ -14,12 +14,12 @@ from openmdao.recorders.recording_manager import RecordingManager
 from openmdao.recorders.recording_iteration_stack import Recording
 from openmdao.utils.hooks import _setup_hooks
 from openmdao.utils.record_util import create_local_meta, check_path
-from openmdao.utils.general_utils import _src_name_iter
+from openmdao.utils.general_utils import _src_name_iter, _src_or_alias_name
 from openmdao.utils.mpi import MPI
 from openmdao.utils.options_dictionary import OptionsDictionary
 import openmdao.utils.coloring as coloring_mod
 from openmdao.utils.array_utils import sizes2offsets
-from openmdao.vectors.vector import _full_slice
+from openmdao.vectors.vector import _full_slice, _flat_full_indexer
 from openmdao.utils.indexer import indexer, slicer
 from openmdao.utils.om_warnings import issue_warning, DerivativesWarning, DriverWarning
 import openmdao.utils.coloring as c_mod
@@ -361,6 +361,7 @@ class Driver(object):
 
                 indices = voimeta['indices']
                 vsrc = voimeta['source']
+                drv_name = _src_or_alias_name(voimeta)
 
                 meta = abs2meta_out[vsrc]
                 i = abs2idx[vsrc]
@@ -386,10 +387,11 @@ class Driver(object):
                                 distrib_indices = dist_inds
 
                         ind = indexer(local_indices, src_shape=(tot_size,), flat_src=True)
-                        dist_dict[vname] = (ind, true_sizes, distrib_indices)
+                        dist_dict[drv_name] = (ind, true_sizes, distrib_indices)
                     else:
-                        dist_dict[vname] = (_full_slice, dist_sizes,
-                                            slice(offsets[rank], offsets[rank] + dist_sizes[rank]))
+                        dist_dict[drv_name] = (_flat_full_indexer, dist_sizes,
+                                               slice(offsets[rank],
+                                                     offsets[rank] + dist_sizes[rank]))
 
                 else:
                     owner = owning_ranks[vsrc]
@@ -588,7 +590,7 @@ class Driver(object):
         src_name = meta['source']
 
         # If there's an alias, use that for driver related stuff
-        drv_name = name if meta.get('alias') else src_name
+        drv_name = _src_or_alias_name(meta)
 
         if MPI:
             distributed = comm.size > 0 and drv_name in self._dist_driver_vars
@@ -735,6 +737,9 @@ class Driver(object):
 
         src_name = meta['source']
 
+        # If there's an alias, use that for driver related stuff
+        drv_name = _src_or_alias_name(meta)
+
         # if the value is not local, don't set the value
         if (src_name in self._remote_dvs and
                 problem.model._owning_rank[src_name] != problem.comm.rank):
@@ -758,8 +763,9 @@ class Driver(object):
 
         elif problem.model._outputs._contains_abs(src_name):
             desvar = problem.model._outputs._abs_get_val(src_name)
-            if name in self._dist_driver_vars:
-                loc_idxs, _, dist_idxs = self._dist_driver_vars[name]
+            if drv_name in self._dist_driver_vars:
+                loc_idxs, _, dist_idxs = self._dist_driver_vars[drv_name]
+                loc_idxs = loc_idxs()  # don't use indexer here
             else:
                 loc_idxs = meta['indices']
                 if loc_idxs is None:
@@ -884,6 +890,7 @@ class Driver(object):
 
         model._setup_driver_units()
 
+        # driver _responses are keyed by either the alias or the promoted name
         self._responses = resps = model.get_responses(recurse=True, use_prom_ivc=True)
         for name, data in resps.items():
             if data['type'] == 'con':
@@ -934,7 +941,7 @@ class Driver(object):
         return self._problem()._metadata['recording_iter']
 
     def _compute_totals(self, of=None, wrt=None, return_format='flat_dict',
-                        use_abs_names=True):
+                        use_abs_names=True, driver_scaling=True):
         """
         Compute derivatives of desired quantities with respect to desired inputs.
 
@@ -954,6 +961,9 @@ class Driver(object):
             the scipy optimizer, 'array' is also supported.
         use_abs_names : bool
             Set to True when passing in absolute names to skip some translation steps.
+        driver_scaling : bool
+            If True (default), scale derivative values by the quantities specified when the desvars
+            and responses were added. If False, leave them unscaled.
 
         Returns
         -------
@@ -976,7 +986,8 @@ class Driver(object):
             try:
                 if total_jac is None:
                     total_jac = _TotalJacInfo(problem, of, wrt, use_abs_names,
-                                              return_format, approx=True, debug_print=debug_print)
+                                              return_format, approx=True, debug_print=debug_print,
+                                              driver_scaling=driver_scaling)
 
                     if total_jac.has_lin_cons:
                         # if we're doing a scaling report, cache the linear total jacobian so we
@@ -995,7 +1006,7 @@ class Driver(object):
         else:
             if total_jac is None:
                 total_jac = _TotalJacInfo(problem, of, wrt, use_abs_names, return_format,
-                                          debug_print=debug_print)
+                                          debug_print=debug_print, driver_scaling=driver_scaling)
 
                 if total_jac.has_lin_cons:
                     # if we're doing a scaling report, cache the linear total jacobian so we
