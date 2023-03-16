@@ -1,11 +1,15 @@
 """
 OpenMDAO Wrapper for the pygmo2 familiy of optimizers
 """
-from numba import jit
 import sys
 from packaging.version import Version
 import numpy as np
-import pygmo as pg  
+try:
+    import pygmo as pg
+except ImportError:
+    pg = None
+except Exception as err:
+    pg = err
 from openmdao.core.constants import INF_BOUND
 from openmdao.core.driver import Driver, RecordingDebugging
 from openmdao.utils.class_util import WeakMethodWrapper
