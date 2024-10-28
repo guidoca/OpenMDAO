@@ -1,6 +1,5 @@
-# from ascensiontoolbox.optimizers.golden_section import golden_section
 from openmdao.drivers.optimizers import golden_section
-#goldenSectionTest tests goldenSection to verify its correct implementation
+# tests goldenSection to verify its correct implementation
 xtol = 1e-4
 
 def costFun_convex1D(x):
